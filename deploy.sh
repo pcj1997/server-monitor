@@ -41,7 +41,7 @@ fi
 echo "[4/7] 部署应用文件..."
 sudo mkdir -p "$APP_DIR"
 # 排除 venv 目录，避免残留旧环境
-sudo rsync -a --exclude='venv' --exclude='__pycache__' "$(dirname "$0")/" "$APP_DIR/"
+sudo rsync -a --exclude='venv' --exclude='__pycache__' --exclude='.git' --exclude='.gitignore' "$(dirname "$0")/" "$APP_DIR/"
 sudo chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 
 # 5. 创建虚拟环境并安装 Python 依赖
