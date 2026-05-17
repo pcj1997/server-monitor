@@ -21,23 +21,6 @@ app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 # 认证 Token，通过配置文件或环境变量设置
 AUTH_TOKEN = os.environ.get("MONITOR_TOKEN", "")
 
-DEFAULT_SERVICES = [
-    "nginx",
-    "ssh",
-    "cron",
-    "docker",
-    "ufw",
-    "mysql",
-    "postgresql",
-    "redis-server",
-    "mongod",
-    "rabbitmq-server",
-    "elasticsearch",
-    "prometheus",
-    "grafana-server",
-    "firewalld",
-]
-
 # 服务扫描结果缓存
 _services_cache = None
 _services_cache_time = 0
@@ -369,59 +352,60 @@ def get_service_list():
 
 
 def get_systemctl_services(service_list=None):
-    """获取 systemctl 服务状态（批量优化）"""
+    """获取 systemctl 服务状态（批量优化，分批防参数溢出）"""
     if service_list is None:
         service_list = get_service_list()
 
     if not service_list:
         return []
 
-    # 批量查询 active 状态
+    BATCH_SIZE = 50  # 每批最多 50 个服务，防止命令行参数过长
+
     active_map = {}
-    try:
-        units = ",".join(service_list)
-        result = subprocess.run(
-            ["sudo", "systemctl", "is-active", *service_list],
-            capture_output=True, text=True, timeout=10
-        )
-        for line in result.stdout.strip().split("\n"):
-            if not line:
-                continue
-            # 输出格式: service_name=active\n 或 单独每行
-        # is-active 多服务时逐行输出
-        lines = result.stdout.strip().split("\n")
-        for i, svc in enumerate(service_list):
-            active_map[svc] = lines[i].strip() if i < len(lines) else "unknown"
-    except Exception:
-        active_map = {svc: "unknown" for svc in service_list}
-
-    # 批量查询 enabled 状态
     enabled_map = {}
-    try:
-        result = subprocess.run(
-            ["sudo", "systemctl", "is-enabled", *service_list],
-            capture_output=True, text=True, timeout=10
-        )
-        lines = result.stdout.strip().split("\n")
-        for i, svc in enumerate(service_list):
-            enabled_map[svc] = lines[i].strip() if i < len(lines) else "unknown"
-    except Exception:
-        enabled_map = {svc: "unknown" for svc in service_list}
-
-    # 批量查询描述
     desc_map = {}
-    try:
-        units_arg = ",".join(service_list)
-        result = subprocess.run(
-            ["sudo", "systemctl", "show", units_arg, "--property=Description"],
-            capture_output=True, text=True, timeout=10
-        )
-        descs = result.stdout.strip().split("\n\n") if result.stdout.strip() else []
-        for i, block in enumerate(descs):
-            if i < len(service_list):
-                desc_map[service_list[i]] = block.replace("Description=", "").strip()
-    except Exception:
-        pass
+
+    for batch_start in range(0, len(service_list), BATCH_SIZE):
+        batch = service_list[batch_start:batch_start + BATCH_SIZE]
+
+        # 批量查询 active 状态
+        try:
+            result = subprocess.run(
+                ["sudo", "systemctl", "is-active"] + batch,
+                capture_output=True, text=True, timeout=10
+            )
+            lines = result.stdout.strip().split("\n")
+            for i, svc in enumerate(batch):
+                active_map[svc] = lines[i].strip() if i < len(lines) else "unknown"
+        except Exception:
+            for svc in batch:
+                active_map[svc] = "unknown"
+
+        # 批量查询 enabled 状态
+        try:
+            result = subprocess.run(
+                ["sudo", "systemctl", "is-enabled"] + batch,
+                capture_output=True, text=True, timeout=10
+            )
+            lines = result.stdout.strip().split("\n")
+            for i, svc in enumerate(batch):
+                enabled_map[svc] = lines[i].strip() if i < len(lines) else "unknown"
+        except Exception:
+            for svc in batch:
+                enabled_map[svc] = "unknown"
+
+        # 批量查询描述
+        try:
+            result = subprocess.run(
+                ["sudo", "systemctl", "show"] + batch + ["--property=Description"],
+                capture_output=True, text=True, timeout=10
+            )
+            descs = result.stdout.strip().split("\n\n") if result.stdout.strip() else []
+            for i, block in enumerate(descs):
+                if i < len(batch):
+                    desc_map[batch[i]] = block.replace("Description=", "").strip()
+        except Exception:
+            pass
 
     services = []
     for svc in service_list:
@@ -453,10 +437,20 @@ def get_process_top(n=10):
     except ImportError:
         return []
 
-    processes = []
-    for proc in psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent", "status"]):
+    # 预热：首次调用 cpu_percent 返回 0，先触发一次采集
+    for proc in psutil.process_iter(["pid"]):
         try:
-            info = proc.info
+            proc.cpu_percent(None)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    # 短暂等待后获取真实数据
+    time.sleep(0.1)
+
+    processes = []
+    for proc in psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent"]):
+        try:
+            info = proc.as_dict(["pid", "name", "cpu_percent", "memory_percent"])
             processes.append(info)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
@@ -616,7 +610,7 @@ def api_all():
         "system": get_system_info(),
         "docker": get_docker_containers(),
         "services": get_systemctl_services(),
-        "services_auto_scan": not config.get("services"),
+        "services_auto_scan": "services" not in config,
         "processes": get_process_top(10),
     })
 

@@ -134,7 +134,8 @@
             <div class="flex items-center gap-2 ml-2 pl-2 border-l border-slate-600">
                 <i class="fas fa-key text-xs text-slate-500"></i>
                 <input type="password" id="token-input" class="token-input w-36"
-                       placeholder="输入管理 Token" autocomplete="off">
+                       placeholder="输入管理 Token" autocomplete="off"
+                       onkeydown="if(event.key==='Enter')saveToken()">
                 <button id="token-save-btn" class="text-xs text-blue-400 hover:text-blue-300 whitespace-nowrap"
                         onclick="saveToken()">验证</button>
                 <span id="token-status" class="text-xs"></span>

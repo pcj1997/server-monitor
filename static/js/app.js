@@ -272,6 +272,9 @@ async function loadLog() {
         } else {
             el.innerHTML = highlightLog(data.log || '（无日志）');
         }
+
+        // 自动滚到底部（最新日志）
+        el.scrollTop = el.scrollHeight;
     } catch (err) {
         document.getElementById('log-modal-content').textContent = '加载失败: ' + err.message;
     }
@@ -380,6 +383,7 @@ function renderDocker(containers) {
         const res = c.resource || {};
         const isRunning = c.state === 'running';
         const isStopped = c.state === 'exited' || c.state === 'stopped';
+        const isPaused = c.state === 'paused';
 
         return `<tr class="border-b border-slate-700/50 hover:bg-slate-700/30">
             <td class="px-4 py-2.5">${statusDot(c.state)}</td>
@@ -391,8 +395,8 @@ function renderDocker(containers) {
             <td class="px-3 py-2">
                 <div class="flex items-center justify-center gap-1 flex-wrap">
                     ${isStopped ? `<button class="action-btn start" onclick="confirmAction('docker','${esc(c.name)}','start')"><i class="fas fa-play"></i> 启动</button>` : ''}
-                    ${isRunning ? `<button class="action-btn stop" onclick="confirmAction('docker','${esc(c.name)}','stop')"><i class="fas fa-stop"></i> 停止</button>` : ''}
-                    ${isRunning ? `<button class="action-btn restart" onclick="confirmAction('docker','${esc(c.name)}','restart')"><i class="fas fa-redo"></i> 重启</button>` : ''}
+                    ${(isRunning || isPaused) ? `<button class="action-btn stop" onclick="confirmAction('docker','${esc(c.name)}','stop')"><i class="fas fa-stop"></i> 停止</button>` : ''}
+                    ${(isRunning || isPaused) ? `<button class="action-btn restart" onclick="confirmAction('docker','${esc(c.name)}','restart')"><i class="fas fa-redo"></i> 重启</button>` : ''}
                     <button class="action-btn log" onclick="openLogModal('docker','${esc(c.name)}')"><i class="fas fa-file-alt"></i> 日志</button>
                 </div>
             </td>
