@@ -38,6 +38,11 @@ DEFAULT_SERVICES = [
     "firewalld",
 ]
 
+# 服务扫描结果缓存
+_services_cache = None
+_services_cache_time = 0
+SERVICES_CACHE_TTL = 60  # 扫描结果缓存 60 秒
+
 CONFIG_PATH = os.environ.get("MONITOR_CONFIG", os.path.join(os.path.dirname(__file__), "config.json"))
 
 # 操作日志记录
@@ -254,11 +259,119 @@ def get_docker_stats():
         return {}
 
 
+def scan_services():
+    """自动扫描系统已安装的 service 单元"""
+    global _services_cache, _services_cache_time
+
+    now = time.time()
+    if _services_cache and (now - _services_cache_time) < SERVICES_CACHE_TTL:
+        return _services_cache
+
+    services = set()
+
+    # 1. 扫描所有 enabled 的 service（最核心的服务）
+    try:
+        result = subprocess.run(
+            ["sudo", "systemctl", "list-unit-files", "--type=service",
+             "--state=enabled", "--no-pager", "--no-legend"],
+            capture_output=True, text=True, timeout=10
+        )
+        for line in result.stdout.strip().split("\n"):
+            if not line:
+                continue
+            # 格式: service-name.service  enabled
+            parts = line.split()
+            if parts:
+                name = parts[0]
+                if name.endswith(".service"):
+                    name = name[:-8]
+                services.add(name)
+    except Exception:
+        pass
+
+    # 2. 扫描当前正在运行但不是 enabled 的 service（手动启动的）
+    try:
+        result = subprocess.run(
+            ["sudo", "systemctl", "list-units", "--type=service",
+             "--state=running", "--no-pager", "--no-legend"],
+            capture_output=True, text=True, timeout=10
+        )
+        for line in result.stdout.strip().split("\n"):
+            if not line:
+                continue
+            parts = line.split()
+            if parts:
+                name = parts[0]
+                if name.endswith(".service"):
+                    name = name[:-8]
+                services.add(name)
+    except Exception:
+        pass
+
+    # 3. 扫描 failed 的 service（需要关注的故障服务）
+    try:
+        result = subprocess.run(
+            ["sudo", "systemctl", "list-units", "--type=service",
+             "--state=failed", "--no-pager", "--no-legend"],
+            capture_output=True, text=True, timeout=10
+        )
+        for line in result.stdout.strip().split("\n"):
+            if not line:
+                continue
+            parts = line.split()
+            if parts:
+                name = parts[0]
+                if name.endswith(".service"):
+                    name = name[:-8]
+                services.add(name)
+    except Exception:
+        pass
+
+    # 过滤掉不感兴趣的系统内部服务
+    SKIP_PREFIXES = (
+        "system-", "user@", "session-", "dbus-", "getty@",
+        "sysinit-", "basic-", "multi-user-", "graphical-",
+        "network-", "local-fs-", "swap-", "cryptsetup-",
+        "systemd-", "block@", "dev-", "dm-event",
+        "lvm2-", "udisks", "udisks2", "accounts-daemon",
+        "colord", "rtkit-daemon", "packagekit", "polkit",
+        "power", "thermald", "switcheroo-control", "fwupd",
+        "bolt", "ModemManager", "NetworkManager-dispatcher",
+        "wpa_supplicant", "avahi-", "cups", "snapd.",
+        "apparmor", "irqbalance", "kerneloops",
+    )
+    SKIP_EXACT = {
+        "rc", "rc-local", "halt", "reboot", "shutdown",
+        "poweroff", "rescue", "emergency", "exit",
+        "dbus", "getty", "login", "user-runtime-dir",
+    }
+
+    filtered = []
+    for svc in sorted(services):
+        if svc in SKIP_EXACT:
+            continue
+        if any(svc.startswith(p) for p in SKIP_PREFIXES):
+            continue
+        filtered.append(svc)
+
+    _services_cache = filtered
+    _services_cache_time = now
+    return filtered
+
+
+def get_service_list():
+    """获取监控的服务列表：config 有配置用配置，否则自动扫描"""
+    config = load_config()
+    custom = config.get("services")
+    if custom:
+        return custom
+    return scan_services()
+
+
 def get_systemctl_services(service_list=None):
     """获取 systemctl 服务状态（批量优化）"""
     if service_list is None:
-        config = load_config()
-        service_list = config.get("services", DEFAULT_SERVICES)
+        service_list = get_service_list()
 
     if not service_list:
         return []
@@ -482,7 +595,12 @@ def api_docker():
 def api_services():
     custom = request.args.get("list")
     service_list = custom.split(",") if custom else None
-    return jsonify(get_systemctl_services(service_list))
+    data = get_systemctl_services(service_list)
+    config = load_config()
+    return jsonify({
+        "auto_scan": not config.get("services"),
+        "services": data,
+    })
 
 
 @app.route("/api/processes")
@@ -493,10 +611,12 @@ def api_processes():
 
 @app.route("/api/all")
 def api_all():
+    config = load_config()
     return jsonify({
         "system": get_system_info(),
         "docker": get_docker_containers(),
         "services": get_systemctl_services(),
+        "services_auto_scan": not config.get("services"),
         "processes": get_process_top(10),
     })
 
@@ -536,6 +656,20 @@ def api_action_log():
     """获取操作日志"""
     n = request.args.get("n", 50, type=int)
     return jsonify(ACTION_LOG[:n])
+
+
+@app.route("/api/services/scan")
+def api_services_scan():
+    """强制重新扫描系统服务"""
+    global _services_cache, _services_cache_time
+    _services_cache = None
+    _services_cache_time = 0
+    services = scan_services()
+    return jsonify({
+        "auto_scan": True,
+        "count": len(services),
+        "services": services,
+    })
 
 
 @app.route("/api/auth/check")

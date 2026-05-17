@@ -400,9 +400,10 @@ function renderDocker(containers) {
     }).join('');
 }
 
-function renderServices(services) {
+function renderServices(services, autoScan) {
     const tbody = document.getElementById('svc-tbody');
     const countSpan = document.getElementById('svc-count');
+    const scanBadge = document.getElementById('svc-scan-badge');
 
     if (!Array.isArray(services)) {
         tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">无法获取服务信息</td></tr>';
@@ -411,6 +412,13 @@ function renderServices(services) {
 
     const active = services.filter(s => s.active === 'active').length;
     countSpan.textContent = `${active}/${services.length}`;
+
+    if (scanBadge) {
+        scanBadge.textContent = autoScan ? '自动扫描' : '自定义';
+        scanBadge.className = autoScan
+            ? 'status-badge bg-blue-600/30 text-blue-300 ml-2'
+            : 'status-badge bg-slate-600 text-slate-300 ml-2';
+    }
 
     tbody.innerHTML = services.map(s => {
         const isActive = s.active === 'active';
@@ -534,7 +542,7 @@ async function fetchData() {
         renderSystemOverview(data.system);
         renderResources(data.system);
         renderDocker(data.docker);
-        renderServices(data.services);
+        renderServices(data.services, data.services_auto_scan);
         renderDisks(data.system?.disks || []);
         renderProcesses(data.processes);
         renderNetwork(data.system?.network || {});
@@ -565,6 +573,19 @@ async function fetchData() {
     fetchFailCount = 0;
     const retryBtn = document.getElementById('retry-btn');
     if (retryBtn) retryBtn.remove();
+}
+
+// ============ 服务重新扫描 ============
+
+async function rescanServices() {
+    try {
+        const resp = await fetch('/api/services/scan');
+        const data = await resp.json();
+        showToast(`扫描完成，发现 ${data.count} 个服务`, 'success');
+        fetchData();
+    } catch (err) {
+        showToast('扫描失败: ' + err.message, 'error');
+    }
 }
 
 // ============ 日志下载 ============
