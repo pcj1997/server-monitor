@@ -1,0 +1,18 @@
+[Unit]
+Description=Server Monitor Dashboard
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=www-monitor
+Group=www-monitor
+WorkingDirectory=/opt/server-monitor
+ExecStart=/opt/server-monitor/venv/bin/gunicorn --workers 2 --bind 0.0.0.0:5050 --timeout 30 app:app
+Restart=always
+RestartSec=5
+Environment=MONITOR_CONFIG=/opt/server-monitor/config.json
+Environment=MONITOR_TOKEN=changeme123
+
+[Install]
+WantedBy=multi-user.target

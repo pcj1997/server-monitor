@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>服务器监控面板</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { 50: '#eff6ff', 500: '#3b82f6', 600: '#2563eb', 700: '#1d4ed8' }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { background: #0f172a; }
+        .card { background: #1e293b; border: 1px solid #334155; border-radius: 0.75rem; }
+        .progress-bar { transition: width 0.6s ease; }
+        .pulse-dot { animation: pulse 2s infinite; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+        .fade-in { animation: fadeIn 0.3s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        .status-badge { font-size: 0.7rem; padding: 2px 8px; border-radius: 9999px; font-weight: 600; }
+        .glow-green { box-shadow: 0 0 8px rgba(34,197,94,0.4); }
+        .glow-red { box-shadow: 0 0 8px rgba(239,68,68,0.4); }
+        .glow-yellow { box-shadow: 0 0 8px rgba(234,179,8,0.4); }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+
+        /* 操作按钮 */
+        .action-btn {
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+            border: 1px solid transparent;
+        }
+        .action-btn:hover { filter: brightness(1.2); }
+        .action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .action-btn.start { background: rgba(34,197,94,0.15); color: #4ade80; border-color: rgba(34,197,94,0.3); }
+        .action-btn.stop { background: rgba(239,68,68,0.15); color: #f87171; border-color: rgba(239,68,68,0.3); }
+        .action-btn.restart { background: rgba(59,130,246,0.15); color: #60a5fa; border-color: rgba(59,130,246,0.3); }
+        .action-btn.log { background: rgba(168,85,247,0.15); color: #c084fc; border-color: rgba(168,85,247,0.3); }
+
+        /* 模态框 */
+        .modal-overlay {
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.7);
+            backdrop-filter: blur(4px);
+            z-index: 100;
+            display: flex; align-items: center; justify-content: center;
+            opacity: 0; pointer-events: none;
+            transition: opacity 0.2s;
+        }
+        .modal-overlay.active { opacity: 1; pointer-events: all; }
+        .modal-box {
+            background: #1e293b;
+            border: 1px solid #475569;
+            border-radius: 0.75rem;
+            width: 90vw; max-width: 900px;
+            max-height: 85vh;
+            display: flex; flex-direction: column;
+            box-shadow: 0 25px 50px rgba(0,0,0,0.5);
+        }
+        .modal-header {
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid #334155;
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        .modal-body {
+            padding: 1rem 1.5rem;
+            overflow-y: auto; flex: 1;
+        }
+        .log-content {
+            font-family: 'Menlo', 'Consolas', 'Courier New', monospace;
+            font-size: 0.75rem;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-break: break-all;
+            color: #cbd5e1;
+            background: #0f172a;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+        .log-content .log-err { color: #f87171; }
+        .log-content .log-warn { color: #fbbf24; }
+        .log-content .log-info { color: #60a5fa; }
+
+        /* Token 输入框 */
+        .token-input {
+            background: #0f172a;
+            border: 1px solid #475569;
+            border-radius: 0.5rem;
+            padding: 0.5rem 0.75rem;
+            color: #e2e8f0;
+            font-size: 0.8rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .token-input:focus { border-color: #3b82f6; }
+    </style>
+</head>
+<body class="text-gray-200 min-h-screen">
+
+<!-- 顶部导航 -->
+<nav class="bg-slate-800/80 backdrop-blur border-b border-slate-700 sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+            <i class="fas fa-server text-blue-400 text-xl"></i>
+            <h1 class="text-lg font-bold text-white">服务器监控面板</h1>
+            <span id="hostname" class="text-sm text-slate-400 ml-2"></span>
+        </div>
+        <div class="flex items-center gap-4 text-sm">
+            <span id="last-update" class="text-slate-500"></span>
+            <span class="flex items-center gap-2">
+                <span class="pulse-dot w-2 h-2 rounded-full bg-green-400 inline-block"></span>
+                <span class="text-green-400">在线</span>
+            </span>
+            <!-- Token 输入 -->
+            <div class="flex items-center gap-2 ml-2 pl-2 border-l border-slate-600">
+                <i class="fas fa-key text-xs text-slate-500"></i>
+                <input type="password" id="token-input" class="token-input w-36"
+                       placeholder="输入管理 Token" autocomplete="off">
+                <button id="token-save-btn" class="text-xs text-blue-400 hover:text-blue-300 whitespace-nowrap"
+                        onclick="saveToken()">验证</button>
+                <span id="token-status" class="text-xs"></span>
+            </div>
+        </div>
+    </div>
+</nav>
+
+<main class="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+
+    <!-- 系统概览 -->
+    <section class="fade-in">
+        <div class="flex items-center gap-2 mb-4">
+            <i class="fas fa-info-circle text-blue-400"></i>
+            <h2 class="text-base font-semibold text-white">系统概览</h2>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3" id="sys-overview">
+        </div>
+    </section>
+
+    <!-- 资源使用 -->
+    <section class="fade-in">
+        <div class="flex items-center gap-2 mb-4">
+            <i class="fas fa-chart-area text-blue-400"></i>
+            <h2 class="text-base font-semibold text-white">资源使用</h2>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="resource-cards">
+        </div>
+    </section>
+
+    <!-- Docker 容器 & Systemctl 服务 -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Docker -->
+        <section class="fade-in">
+            <div class="flex items-center gap-2 mb-4">
+                <i class="fab fa-docker text-blue-400"></i>
+                <h2 class="text-base font-semibold text-white">Docker 容器</h2>
+                <span id="docker-count" class="status-badge bg-slate-600 text-slate-300 ml-2"></span>
+            </div>
+            <div class="card overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="text-slate-400 text-xs uppercase border-b border-slate-700">
+                                <th class="px-4 py-3 text-left">状态</th>
+                                <th class="px-4 py-3 text-left">名称</th>
+                                <th class="px-4 py-3 text-left">镜像</th>
+                                <th class="px-4 py-3 text-left">CPU</th>
+                                <th class="px-4 py-3 text-left">内存</th>
+                                <th class="px-4 py-3 text-left">端口</th>
+                                <th class="px-4 py-3 text-center">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="docker-tbody"></tbody>
+                    </table>
+                </div>
+                <div id="docker-error" class="hidden px-4 py-8 text-center text-slate-500">
+                    <i class="fab fa-docker text-3xl mb-2"></i>
+                    <p></p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Systemctl -->
+        <section class="fade-in">
+            <div class="flex items-center gap-2 mb-4">
+                <i class="fas fa-cogs text-blue-400"></i>
+                <h2 class="text-base font-semibold text-white">Systemctl 服务</h2>
+                <span id="svc-count" class="status-badge bg-slate-600 text-slate-300 ml-2"></span>
+            </div>
+            <div class="card overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="text-slate-400 text-xs uppercase border-b border-slate-700">
+                                <th class="px-4 py-3 text-left">状态</th>
+                                <th class="px-4 py-3 text-left">服务名</th>
+                                <th class="px-4 py-3 text-left">描述</th>
+                                <th class="px-4 py-3 text-left">开机启动</th>
+                                <th class="px-4 py-3 text-center">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="svc-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- 磁盘 & 进程 & 网络 -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- 磁盘 -->
+        <section class="fade-in">
+            <div class="flex items-center gap-2 mb-4">
+                <i class="fas fa-hdd text-blue-400"></i>
+                <h2 class="text-base font-semibold text-white">磁盘使用</h2>
+            </div>
+            <div class="card p-4 space-y-4" id="disk-section"></div>
+        </section>
+
+        <!-- 进程 TOP -->
+        <section class="fade-in">
+            <div class="flex items-center gap-2 mb-4">
+                <i class="fas fa-microchip text-blue-400"></i>
+                <h2 class="text-base font-semibold text-white">进程 TOP 10</h2>
+            </div>
+            <div class="card overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="text-slate-400 text-xs uppercase border-b border-slate-700">
+                                <th class="px-4 py-3 text-left">PID</th>
+                                <th class="px-4 py-3 text-left">名称</th>
+                                <th class="px-4 py-3 text-right">CPU%</th>
+                                <th class="px-4 py-3 text-right">MEM%</th>
+                            </tr>
+                        </thead>
+                        <tbody id="proc-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- 操作日志 & 网络流量 -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- 操作日志 -->
+        <section class="fade-in lg:col-span-2">
+            <div class="flex items-center gap-2 mb-4">
+                <i class="fas fa-history text-blue-400"></i>
+                <h2 class="text-base font-semibold text-white">操作日志</h2>
+            </div>
+            <div class="card overflow-hidden">
+                <div class="overflow-x-auto" style="max-height: 300px;">
+                    <table class="w-full text-sm">
+                        <thead class="sticky top-0 bg-slate-800">
+                            <tr class="text-slate-400 text-xs uppercase border-b border-slate-700">
+                                <th class="px-4 py-2 text-left">时间</th>
+                                <th class="px-4 py-2 text-left">类型</th>
+                                <th class="px-4 py-2 text-left">目标</th>
+                                <th class="px-4 py-2 text-left">操作</th>
+                                <th class="px-4 py-2 text-left">结果</th>
+                            </tr>
+                        </thead>
+                        <tbody id="action-log-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- 网络流量 -->
+        <section class="fade-in">
+            <div class="flex items-center gap-2 mb-4">
+                <i class="fas fa-network-wired text-blue-400"></i>
+                <h2 class="text-base font-semibold text-white">网络流量</h2>
+            </div>
+            <div class="grid grid-cols-2 gap-3" id="network-section"></div>
+        </section>
+    </div>
+
+</main>
+
+<footer class="text-center text-slate-600 text-xs py-6">
+    服务器监控面板 &copy; 2025 &nbsp;|&nbsp; 自动刷新间隔: <span id="refresh-interval">5</span>s
+</footer>
+
+<!-- 日志模态框 -->
+<div id="log-modal" class="modal-overlay" onclick="closeLogModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <div class="flex items-center gap-3">
+                <i id="log-modal-icon" class="fas fa-file-alt text-blue-400"></i>
+                <h3 id="log-modal-title" class="text-white font-semibold"></h3>
+                <span id="log-modal-subtitle" class="text-xs text-slate-400"></span>
+            </div>
+            <div class="flex items-center gap-3">
+                <select id="log-lines-select" class="token-input text-xs py-1" onchange="reloadLog()">
+                    <option value="50">最近 50 行</option>
+                    <option value="100" selected>最近 100 行</option>
+                    <option value="200">最近 200 行</option>
+                    <option value="500">最近 500 行</option>
+                </select>
+                <button class="action-btn restart text-xs" onclick="reloadLog()">
+                    <i class="fas fa-sync-alt mr-1"></i>刷新
+                </button>
+                <button class="action-btn log text-xs" onclick="downloadLog()">
+                    <i class="fas fa-download mr-1"></i>下载
+                </button>
+                <button class="text-slate-400 hover:text-white text-lg" onclick="closeLogModal()">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        </div>
+        <div class="modal-body">
+            <div id="log-modal-content" class="log-content">加载中...</div>
+        </div>
+    </div>
+</div>
+
+<!-- 确认操作模态框 -->
+<div id="confirm-modal" class="modal-overlay" onclick="closeConfirmModal(event)">
+    <div class="modal-box" style="max-width: 450px;" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <h3 class="text-white font-semibold">确认操作</h3>
+            <button class="text-slate-400 hover:text-white text-lg" onclick="closeConfirmModal()">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div class="modal-body">
+            <p id="confirm-message" class="text-slate-300 mb-4"></p>
+            <div class="flex justify-end gap-3">
+                <button class="action-btn" style="background:#475569;color:#e2e8f0;padding:6px 16px;" onclick="closeConfirmModal()">取消</button>
+                <button id="confirm-ok-btn" class="action-btn restart" style="padding:6px 16px;" onclick="executeConfirmed()">确认执行</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>
